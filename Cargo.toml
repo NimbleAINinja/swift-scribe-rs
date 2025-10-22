@@ -1,0 +1,37 @@
+[package]
+name = "swift-scribe-rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["NimbleAINinja"]
+description = "Fast, on-device speech-to-text transcription for macOS using Apple's Speech framework"
+license = "MIT"
+repository = "https://github.com/NimbleAINinja/swift-scribe-rs"
+keywords = ["speech", "transcription", "macos", "stt", "speechanalyzer"]
+categories = ["multimedia::audio", "api-bindings"]
+
+[[bin]]
+name = "swift-scribe"
+path = "src/main.rs"
+
+[[bin]]
+name = "swift-scribe-bench"
+path = "src/bench.rs"
+required-features = ["bench"]
+
+[lib]
+name = "swift_scribe"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dirs = "5.0"
+
+# Optional dependencies for binaries
+reqwest = { version = "0.12", features = ["blocking", "multipart"], optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+
+[features]
+default = []
+bench = ["reqwest", "tokio", "clap"]
