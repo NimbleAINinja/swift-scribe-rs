@@ -4,6 +4,10 @@ Cargo.lock
 **/*.rs.bk
 *.pdb
 
+# Swift helpers (compiled binaries)
+/helpers/transcribe
+/helpers/transcribe_stream
+
 # Swift-bridge generated files
 /generated/
 
