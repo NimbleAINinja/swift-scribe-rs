@@ -220,6 +220,21 @@ For realistic benchmarks, use:
 - **Various quality**: studio vs phone recording
 - **Multiple languages**: if testing international use cases
 
+## Streaming vs File Transcription
+
+**Note:** This benchmark tool measures file-to-text transcription speed.
+
+**For streaming/real-time transcription:**
+- Uses different API preset (`.progressiveTranscription`)
+- Provides partial results as audio is received
+- Latency measured differently (time-to-first-result)
+- Throughput less relevant than responsiveness
+
+To test streaming performance, use:
+```bash
+cargo run --example stream_mic  # Test microphone latency
+```
+
 ## Contributing Benchmarks
 
 Share your results by opening an issue with:

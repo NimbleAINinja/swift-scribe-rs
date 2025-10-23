@@ -100,25 +100,36 @@ cargo run --example stream_mic
 
 ### System Audio Capture (stdin mode)
 
-The helper can accept audio from stdin for system audio tap integration:
+The helper accepts audio from stdin with automatic format conversion:
 
 ```bash
-# Using ffmpeg to capture and pipe audio
+# Using ffmpeg to capture and pipe audio (any sample rate/channels)
+ffmpeg -f avfoundation -i ":1" -f s16le - | \
+  ./helpers/transcribe_stream --stdin --sample-rate 48000 --channels 2
+
+# Simplified - use optimal format (16kHz mono, no conversion overhead)
 ffmpeg -f avfoundation -i ":1" -ar 16000 -ac 1 -f s16le - | \
   ./helpers/transcribe_stream --stdin
 
-# Or from an audio file
-ffmpeg -i audio.m4a -ar 16000 -ac 1 -f s16le - | \
-  ./helpers/transcribe_stream --stdin
+# From an audio file
+ffmpeg -i audio.m4a -f s16le - | \
+  ./helpers/transcribe_stream --stdin --sample-rate 44100 --channels 2
 ```
 
-**Audio Format:** 16kHz, 16-bit, mono PCM (s16le)
+**Format Flexibility:**
+- Accepts any sample rate (8kHz-48kHz typical)
+- Accepts mono or stereo input
+- Automatically resamples to 16kHz mono for optimal Speech recognition
+- Use `--sample-rate` and `--channels` flags to match your source format
+- Defaults: 16kHz mono (optimal, no conversion needed)
+
+**Audio format:** 16-bit PCM (s16le) required. Sample rate and channels are configurable.
 
 For integration examples, see `examples/system_audio.rs` which demonstrates the pattern for:
 - Capturing system audio using ScreenCaptureKit or similar
-- Resampling to the required format
-- Piping to the transcription helper
+- Piping directly to the transcription helper
 - Reading real-time transcription results
+- No manual resampling required
 
 **Recommended libraries for system audio:**
 - [ruhear](https://github.com/aizcutei/ruhear) - Simple cross-platform audio capture

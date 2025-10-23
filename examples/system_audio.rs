@@ -3,19 +3,16 @@
 //! Demonstrates the concept of capturing system audio and feeding it to the
 //! transcription helper via stdin for real-time transcription.
 //!
-//! NOTE: This is a conceptual example showing the integration pattern.
-//! Actual system audio capture requires either:
-//! 1. ScreenCaptureKit (macOS 12.3+) with proper audio conversion
-//! 2. Core Audio taps (macOS 14.4+)
-//! 3. Third-party library like `ruhear` with cidre
+//! The helper accepts audio in any common format and automatically resamples
+//! to the optimal format for speech recognition (16kHz mono).
 //!
 //! For production use, consider using a library like `ruhear` that handles
-//! audio capture and resampling:
+//! audio capture:
 //! https://github.com/aizcutei/ruhear
 //!
 //! Requirements:
-//! - macOS 12.3+ (for ScreenCaptureKit)
-//! - Screen Recording permission granted
+//! - macOS 10.15+ (for transcription)
+//! - Microphone/Screen Recording permissions as needed
 //!
 //! Usage:
 //!     cargo run --example system_audio
@@ -30,17 +27,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("This example demonstrates how to pipe audio to the transcription helper.");
     println!();
-    println!("The helper expects 16kHz, 16-bit, mono PCM audio on stdin.");
-    println!("Audio format: PCM s16le, 16000 Hz, 1 channel");
+    println!("The helper accepts various audio formats and automatically resamples:");
+    println!("  - Any sample rate (8kHz-48kHz typical)");
+    println!("  - Mono or stereo input");
+    println!("  - Format: 16-bit PCM (s16le)");
     println!();
     println!("To test with actual system audio, you can use:");
     println!("  1. A system audio capture tool (e.g., BlackHole, ruhear)");
-    println!("  2. ffmpeg to capture and convert audio:");
-    println!("     ffmpeg -f avfoundation -i \":1\" -ar 16000 -ac 1 -f s16le - | \\");
-    println!("       ./helpers/transcribe_stream --stdin");
+    println!("  2. ffmpeg to capture audio (helper handles resampling):");
+    println!("     ffmpeg -f avfoundation -i \":1\" -f s16le - | \\");
+    println!("       ./helpers/transcribe_stream --stdin --sample-rate 48000 --channels 2");
     println!();
-    println!("Or test with a file:");
+    println!("Or use optimal format (no resampling needed):");
     println!("  ffmpeg -i audio.m4a -ar 16000 -ac 1 -f s16le - | \\");
+    println!("    ./helpers/transcribe_stream --stdin");
+    println!();
+    println!("Or with real-time playback:");
+    println!("  ffmpeg -re -i audio.m4a -ar 16000 -ac 1 -f s16le - | \\");
     println!("    ./helpers/transcribe_stream --stdin");
     println!();
 
@@ -91,21 +94,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Helper is running and waiting for audio data on stdin...");
     println!();
     println!("Integration pattern for your application:");
-    println!("  1. Capture system audio using ScreenCaptureKit or similar");
-    println!("  2. Resample to 16kHz mono (can use `rubato` or `samplerate` crates)");
-    println!("  3. Convert to 16-bit PCM (s16le)");
-    println!("  4. Write bytes to helper's stdin");
+    println!("  1. Capture system audio using ScreenCaptureKit, ruhear, or similar");
+    println!("  2. Convert audio samples to 16-bit PCM (i16)");
+    println!("  3. Launch helper with --sample-rate and --channels matching your source");
+    println!("  4. Write PCM bytes to helper's stdin");
     println!("  5. Read JSON results from helper's stdout");
     println!();
     println!("Example code structure:");
     println!(r#"
+    // Launch helper with source format (e.g., 48kHz stereo from ScreenCaptureKit)
+    let mut helper = Command::new("./helpers/transcribe_stream")
+        .arg("--stdin")
+        .arg("--sample-rate").arg("48000")
+        .arg("--channels").arg("2")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    
     // In your audio callback:
     fn handle_audio_buffer(audio_data: &[f32]) {{
-        // 1. Resample to 16kHz if needed
-        let resampled = resample_to_16khz(audio_data);
-        
-        // 2. Convert f32 samples to i16
-        let pcm_data: Vec<u8> = resampled
+        // Convert f32 samples to i16 PCM
+        let pcm_data: Vec<u8> = audio_data
             .iter()
             .flat_map(|sample| {{
                 let sample_i16 = (sample * 32767.0) as i16;
@@ -113,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }})
             .collect();
         
-        // 3. Write to helper stdin
+        // Write to helper stdin (resampling happens automatically)
         helper_stdin.write_all(&pcm_data)?;
         helper_stdin.flush()?;
     }}

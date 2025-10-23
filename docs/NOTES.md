@@ -72,23 +72,28 @@ Rust CLI → executes → Swift Helper → returns → transcription text
 
 ## Current Status
 
- **Working**:
+**Working**:
 - Rust CLI compiles and runs
-- Swift helper compiles with swiftc
--  **SpeechAnalyzer API implementation (macOS 26+)** with automatic fallback
+- Swift helpers compile with swiftc (transcribe + transcribe_stream)
+- SpeechAnalyzer API implementation (macOS 26+) with automatic fallback
 - SFSpeechRecognizer API (macOS 10.15+) as fallback
 - Runtime version detection and automatic API selection
-- Handles audio file transcription
+- File transcription from audio files
+- **Live microphone transcription with progressive results**
+- **System audio tap support via stdin mode**
+- StreamingTranscriber library API
+- Partial and final result handling
+- JSON output format for streaming
 - Error handling and user feedback
 - Makefile for build orchestration
 
-⏳ **Future Work**:
+**Future Work**:
 - Support multiple languages/locales (via CLI flag)
-- JSON output format with metadata
-- Word-level timestamps
-- Confidence scores
-- Streaming audio input
+- Extended metadata output format
+- Word-level timestamps (using audioTimeRange attributes)
+- Confidence scores from result attributes
 - Asset management for model downloads
+- SRT subtitle export with timestamps
 
 ## Building
 
@@ -114,19 +119,26 @@ make clean
 ```
 swift-scribe-rs/
 ├── src/
-│   ├── main.rs              # CLI entry point
-│   ├── lib.rs               # Library API
-│   └── bench.rs             # Benchmarking tool
+│   ├── main.rs                    # CLI entry point
+│   ├── lib.rs                     # Library API (Transcriber + StreamingTranscriber)
+│   └── bench.rs                   # Benchmarking tool
 ├── helpers/
-│   ├── transcribe.swift     # Swift source
-│   └── transcribe           # Compiled Swift binary (gitignored)
+│   ├── transcribe.swift           # File transcription helper
+│   ├── transcribe_stream.swift    # Streaming transcription helper
+│   ├── transcribe                 # Compiled binaries (gitignored)
+│   └── transcribe_stream
 ├── examples/
-│   ├── simple.rs            # Basic usage example
-│   └── batch.rs             # Batch processing example
-├── Cargo.toml               # Dependencies
-├── Makefile                 # Build orchestration
-├── install_helper.sh        # Helper installation
-└── README.md                # User documentation
+│   ├── stream_mic.rs              # Live microphone example
+│   └── system_audio.rs            # System audio integration pattern
+├── docs/
+│   ├── LIBRARY_USAGE.md           # Complete library documentation
+│   ├── BENCHMARKING.md            # Performance comparison guide
+│   ├── NOTES.md                   # Development notes (this file)
+│   └── SPEECHANALYZER_API_REFERENCE.md  # SpeechAnalyzer API details
+├── Cargo.toml                     # Dependencies
+├── Makefile                       # Build orchestration
+├── install_helper.sh              # Helper installation
+└── README.md                      # User documentation
 ```
 
 ## SpeechAnalyzer Implementation ( Complete)

@@ -33,9 +33,9 @@ swift-scribe-rs = "0.1"
 
 ## Requirements
 
-### 1. Install the Swift Helper
+### 1. Install the Swift Helpers
 
-The library requires the Swift helper binary to be installed:
+The library requires the Swift helper binaries to be installed:
 
 ```bash
 # From the swift-scribe-rs repository
@@ -45,15 +45,17 @@ make helpers
 # Install to user directory
 mkdir -p ~/.local/bin
 cp helpers/transcribe ~/.local/bin/
+cp helpers/transcribe_stream ~/.local/bin/
 
 # Or install system-wide
 sudo cp helpers/transcribe /usr/local/bin/
+sudo cp helpers/transcribe_stream /usr/local/bin/
 ```
 
-The library will look for the helper in these locations (in order):
-1. `./helpers/transcribe` (for local development)
-2. `~/.local/bin/transcribe` (user install)
-3. `/usr/local/bin/transcribe` (system install)
+The library will look for helpers in these locations (in order):
+1. `./helpers/transcribe[_stream]` (for local development)
+2. `~/.local/bin/transcribe[_stream]` (user install)
+3. `/usr/local/bin/transcribe[_stream]` (system install)
 
 ### 2. macOS Requirements
 
@@ -63,7 +65,7 @@ The library will look for the helper in these locations (in order):
 
 ## Basic Usage
 
-### Simple Transcription
+### File Transcription
 
 ```rust
 use swift_scribe::Transcriber;
@@ -79,6 +81,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     println!("Transcription: {}", text);
     Ok(())
+}
+```
+
+### Live Streaming Transcription
+
+```rust
+use swift_scribe::StreamingTranscriber;
+use std::thread;
+use std::time::Duration;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create streaming transcriber for microphone input
+    let mut transcriber = StreamingTranscriber::new()?;
+    
+    // Start capturing from microphone
+    transcriber.start()?;
+    
+    println!("Listening... speak into your microphone");
+    
+    // Poll for results
+    loop {
+        match transcriber.poll_result()? {
+            Some(result) => {
+                if result.is_final {
+                    println!("Final: {}", result.text);
+                } else {
+                    print!("\rPartial: {}", result.text);
+                }
+            }
+            None => thread::sleep(Duration::from_millis(50)),
+        }
+    }
 }
 ```
 
@@ -158,6 +192,96 @@ fn transcribe_directory(dir: &Path) -> Result<Vec<(String, String)>, Box<dyn std
     Ok(results)
 }
 ```
+
+## Streaming Audio from External Sources
+
+### System Audio Capture Pattern
+
+For applications that need to transcribe system audio or audio from other sources:
+
+```rust
+use swift_scribe::StreamingTranscriber;
+use std::process::{Command, Stdio};
+use std::io::Write;
+
+fn transcribe_audio_stream(
+    audio_data: &[i16], 
+    sample_rate: u32, 
+    channels: u16
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Launch helper in stdin mode with source format
+    let mut helper = Command::new("./helpers/transcribe_stream")
+        .arg("--stdin")
+        .arg("--sample-rate")
+        .arg(sample_rate.to_string())
+        .arg("--channels")
+        .arg(channels.to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    
+    let mut stdin = helper.stdin.take().unwrap();
+    let stdout = helper.stdout.take().unwrap();
+    
+    // Spawn thread to read results
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let reader = std::io::BufReader::new(stdout);
+        for line in reader.lines() {
+            if let Ok(result) = serde_json::from_str::<StreamingResult>(&line?) {
+                println!("{}: {}", 
+                    if result.is_final { "FINAL" } else { "partial" },
+                    result.text);
+            }
+        }
+        Ok::<_, Box<dyn std::error::Error>>(())
+    });
+    
+    // Write audio data as 16-bit PCM samples
+    for sample in audio_data {
+        stdin.write_all(&sample.to_le_bytes())?;
+    }
+    stdin.flush()?;
+    
+    helper.wait()?;
+    Ok(())
+}
+
+// Example: Use with 48kHz stereo audio
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let audio_samples: Vec<i16> = vec![/* captured audio */];
+    transcribe_audio_stream(&audio_samples, 48000, 2)?;
+    Ok(())
+}
+```
+
+**Audio format flexibility:**
+- **Sample rate**: Any common rate (8kHz-48kHz) - helper resamples to 16kHz internally
+- **Channels**: Mono (1) or stereo (2) - helper converts to mono internally
+- **Format**: 16-bit signed PCM (little-endian) required
+- **Optimal**: 16kHz mono (no conversion overhead)
+
+**Command-line options:**
+```bash
+--stdin                     Enable stdin audio input mode
+--sample-rate <RATE>       Source audio sample rate (default: 16000)
+--channels <COUNT>         Source audio channels: 1=mono, 2=stereo (default: 1)
+```
+
+**Why this matters:**
+- No need to resample externally - helper handles it
+- Works with audio capture libraries that output their native formats
+- Optimal performance when you provide 16kHz mono directly
+- Automatic conversion uses Apple's optimized AVAudioConverter
+
+**Integration with audio capture libraries:**
+
+For system audio capture, consider using:
+- **ruhear** - Simple cross-platform audio capture (typically 48kHz stereo)
+- **screencapturekit-rs** - macOS ScreenCaptureKit bindings (configurable format)
+- **cpal** - Cross-platform audio I/O (various formats)
+
+See `examples/system_audio.rs` for detailed integration patterns.
 
 ## Advanced Usage
 
@@ -291,7 +415,7 @@ async fn main() {
 
 ### `Transcriber`
 
-Main struct for transcription operations.
+Main struct for file transcription operations.
 
 #### Methods
 
@@ -329,9 +453,77 @@ Transcribes an audio file to text.
 
 Returns the path to the helper binary being used.
 
+### `StreamingTranscriber`
+
+Struct for real-time streaming transcription from microphone or audio buffers.
+
+#### Methods
+
+##### `new() -> Result<Self, String>`
+
+Creates a streaming transcriber using automatic helper discovery.
+
+**Errors:** Returns error if helper binary not found in default locations.
+
+##### `with_helper_path<P: AsRef<Path>>(path: P) -> Result<Self, String>`
+
+Creates a streaming transcriber with explicit helper path.
+
+**Arguments:**
+- `path`: Path to the transcribe_stream helper binary
+
+**Errors:** Returns error if specified path doesn't exist.
+
+##### `start(&mut self) -> Result<(), String>`
+
+Starts streaming transcription from the microphone.
+
+**Errors:** Returns error if:
+- Helper process fails to start
+- Microphone permissions not granted
+
+##### `poll_result(&mut self) -> Result<Option<StreamingResult>, String>`
+
+Non-blocking poll for next transcription result.
+
+**Returns:**
+- `Ok(Some(result))` - New result available
+- `Ok(None)` - No result ready yet
+- `Err(_)` - Error occurred
+
+**Usage:** Call repeatedly in a loop with small delays.
+
+##### `stop(&mut self) -> Result<(), String>`
+
+Stops streaming transcription and cleans up resources.
+
+##### `is_running(&self) -> bool`
+
+Returns whether streaming transcription is currently active.
+
+##### `helper_path(&self) -> &Path`
+
+Returns the path to the helper binary being used.
+
+### `StreamingResult`
+
+Result from streaming transcription with real-time metadata.
+
+```rust
+pub struct StreamingResult {
+    pub text: String,           // Transcribed text
+    pub is_final: bool,         // true = finalized, false = partial/volatile
+    pub timestamp: f64,         // Unix timestamp when generated
+}
+```
+
+**Partial results:** Intermediate transcriptions that may change as more audio is processed.
+
+**Final results:** Confirmed transcriptions that will not be updated.
+
 ### `TranscriptionResult`
 
-Result structure (currently minimal, prepared for future metadata).
+Result structure for file transcription (currently minimal, prepared for future metadata).
 
 ```rust
 pub struct TranscriptionResult {
@@ -454,11 +646,10 @@ end
 
 ## Examples
 
-See the `examples/` directory (if available) for:
-- Simple CLI tool
-- Batch processor
-- Web API server
-- GUI application
+See the `examples/` directory for:
+- `stream_mic.rs` - Live microphone transcription
+- `system_audio.rs` - System audio capture integration pattern
+- Additional examples for batch processing and web APIs
 
 ## Getting Help
 

@@ -261,18 +261,24 @@ for run in result.text.runs {
 }
 ```
 
-## Future Enhancements for swift-scribe-rs
+## Enhancements for swift-scribe-rs
 
-Based on this API, we could add:
+**Currently Implemented:**
+
+- [x] **Real-time mode** for live transcription (microphone + stdin modes)
+- [x] **Progressive transcription** using `.progressiveTranscription` preset
+- [x] **Volatile and final results** handling in streaming API
+- [x] **Automatic fallback** to SFSpeechRecognizer on older macOS
+
+**Future Additions:**
 
 - [ ] **Preset selection** via CLI flag (`--preset progressive`)
-- [ ] **Real-time mode** for live transcription (`--live`)
 - [ ] **SRT output** using `attributeOptions: [.audioTimeRange]`
 - [ ] **Alternative transcriptions** for editing use case
 - [ ] **Multiple languages** via `--locale` flag
 - [ ] **DictationTranscriber** fallback for older hardware
 - [ ] **Voice Activity Detection** with SpeechDetector
-- [ ] **Confidence scores** (available in attributes)
+- [ ] **Confidence scores** from result attributes
 
 ## Official Resources
 
@@ -283,14 +289,18 @@ Based on this API, we could add:
 
 ## Notes on Our Implementation
 
-**Current:** We use `.transcription` preset with file input, processing only final results.
+**File Transcription:** Uses `.transcription` preset with file input, processing only final results.
 
 **Why:**
 - Simple and reliable for batch file transcription
-- No UI to update with volatile results
 - Optimal accuracy without real-time overhead
-- Works well for CLI use case
+- No need to handle volatile updates
 
-**To enable real-time:** Switch to `.progressiveTranscription` preset and process volatile results.
+**Streaming Transcription:** Uses `.progressiveTranscription` preset with microphone or stdin input.
 
-**To enable timestamps:** Switch to `.timeIndexedTranscription*` preset and read `result.range`.
+**Why:**
+- Low-latency real-time feedback
+- Provides both volatile and final results
+- Suitable for live transcription applications
+
+**Future:** Add `.timeIndexedTranscription*` presets to enable word-level timestamps and SRT export.
