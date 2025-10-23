@@ -237,38 +237,298 @@ class LegacyStreamingTranscriber {
     }
 }
 
+// Modern SpeechAnalyzer with stdin audio input (macOS 26+)
+@available(macOS 26.0, *)
+class StdinStreamingTranscriber {
+    private let locale: Locale
+    private var analyzer: SpeechAnalyzer?
+    private var transcriber: SpeechTranscriber?
+    private var inputBuilder: AsyncStream<AnalyzerInput>.Continuation?
+    
+    init(locale: Locale = Locale(identifier: "en-US")) {
+        self.locale = locale
+    }
+    
+    func start() async throws {
+        // Verify locale is supported
+        let supportedLocales = await SpeechTranscriber.supportedLocales
+        guard supportedLocales.map({ $0.identifier(.bcp47) }).contains(locale.identifier(.bcp47)) else {
+            throw NSError(
+                domain: "SpeechRecognition",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Locale '\(locale.identifier)' not supported"]
+            )
+        }
+        
+        // Initialize transcriber with progressive preset
+        let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
+        self.transcriber = transcriber
+        
+        // Create analyzer
+        let modules: [any SpeechModule] = [transcriber]
+        let analyzer = SpeechAnalyzer(modules: modules)
+        self.analyzer = analyzer
+        
+        // Expected format: 16kHz, 16-bit, mono PCM
+        let audioFormat = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: 16000,
+            channels: 1,
+            interleaved: true
+        )!
+        
+        // Create async stream for feeding audio
+        let (inputSequence, inputBuilder) = AsyncStream<AnalyzerInput>.makeStream()
+        self.inputBuilder = inputBuilder
+        
+        // Start analyzer
+        try await analyzer.start(inputSequence: inputSequence)
+        
+        // Process results in parallel
+        Task {
+            await self.processResults()
+        }
+        
+        // Read audio from stdin in background
+        Task.detached {
+            await self.readStdinAudio(format: audioFormat, inputBuilder: inputBuilder)
+        }
+    }
+    
+    private func readStdinAudio(format: AVAudioFormat, inputBuilder: AsyncStream<AnalyzerInput>.Continuation) async {
+        let bufferSize = 4096
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
+        
+        while true {
+            let bytesRead = fread(&buffer, 1, bufferSize, stdin)
+            if bytesRead == 0 {
+                break
+            }
+            
+            // Convert raw bytes to AVAudioPCMBuffer
+            if let pcmBuffer = self.createPCMBuffer(from: buffer, count: bytesRead, format: format) {
+                let input = AnalyzerInput(buffer: pcmBuffer)
+                inputBuilder.yield(input)
+            }
+        }
+        
+        inputBuilder.finish()
+    }
+    
+    private func createPCMBuffer(from data: [UInt8], count: Int, format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        let frameCount = count / Int(format.streamDescription.pointee.mBytesPerFrame)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount)) else {
+            return nil
+        }
+        
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        
+        // Copy data to buffer
+        if let int16ChannelData = buffer.int16ChannelData {
+            data.withUnsafeBytes { rawBuffer in
+                let int16Pointer = rawBuffer.bindMemory(to: Int16.self)
+                int16ChannelData[0].update(from: int16Pointer.baseAddress!, count: frameCount)
+            }
+        }
+        
+        return buffer
+    }
+    
+    private func processResults() async {
+        guard let transcriber = self.transcriber else { return }
+        
+        do {
+            for try await result in transcriber.results {
+                let output = TranscriptionOutput(
+                    text: String(result.text.characters),
+                    isFinal: result.isFinal,
+                    timestamp: Date().timeIntervalSince1970
+                )
+                
+                if let jsonData = try? JSONEncoder().encode(output),
+                   let jsonString = String(data: jsonData, encoding: .utf8) {
+                    print(jsonString)
+                    fflush(stdout)
+                }
+            }
+        } catch {
+            fputs("Error processing results: \(error.localizedDescription)\n", stderr)
+        }
+    }
+    
+    func stop() async throws {
+        inputBuilder?.finish()
+        if let analyzer = self.analyzer {
+            try await analyzer.finalizeAndFinishThroughEndOfInput()
+        }
+    }
+}
+
+// Legacy stdin transcriber (macOS 10.15+)
+@available(macOS 10.15, *)
+class LegacyStdinStreamingTranscriber {
+    private let locale: Locale
+    private var recognizer: SFSpeechRecognizer?
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    
+    init(locale: Locale = Locale(identifier: "en-US")) {
+        self.locale = locale
+    }
+    
+    func start() throws {
+        guard let recognizer = SFSpeechRecognizer(locale: locale) else {
+            throw NSError(
+                domain: "SpeechRecognition",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Speech recognizer not available"]
+            )
+        }
+        
+        guard recognizer.isAvailable else {
+            throw NSError(
+                domain: "SpeechRecognition",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Speech recognizer not available"]
+            )
+        }
+        
+        self.recognizer = recognizer
+        
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        self.recognitionRequest = request
+        
+        recognitionTask = recognizer.recognitionTask(with: request) { result, error in
+            if let error = error {
+                fputs("Recognition error: \(error.localizedDescription)\n", stderr)
+                return
+            }
+            
+            if let result = result {
+                let output = TranscriptionOutput(
+                    text: result.bestTranscription.formattedString,
+                    isFinal: result.isFinal,
+                    timestamp: Date().timeIntervalSince1970
+                )
+                
+                if let jsonData = try? JSONEncoder().encode(output),
+                   let jsonString = String(data: jsonData, encoding: .utf8) {
+                    print(jsonString)
+                    fflush(stdout)
+                }
+            }
+        }
+        
+        // Read from stdin in background
+        Task.detached {
+            let format = AVAudioFormat(
+                commonFormat: .pcmFormatInt16,
+                sampleRate: 16000,
+                channels: 1,
+                interleaved: true
+            )!
+            
+            let bufferSize = 4096
+            var buffer = [UInt8](repeating: 0, count: bufferSize)
+            
+            while true {
+                let bytesRead = fread(&buffer, 1, bufferSize, stdin)
+                if bytesRead == 0 {
+                    break
+                }
+                
+                if let pcmBuffer = self.createPCMBuffer(from: buffer, count: bytesRead, format: format) {
+                    self.recognitionRequest?.append(pcmBuffer)
+                }
+            }
+            
+            self.recognitionRequest?.endAudio()
+        }
+    }
+    
+    private func createPCMBuffer(from data: [UInt8], count: Int, format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        let frameCount = count / Int(format.streamDescription.pointee.mBytesPerFrame)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount)) else {
+            return nil
+        }
+        
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        
+        if let int16ChannelData = buffer.int16ChannelData {
+            data.withUnsafeBytes { rawBuffer in
+                let int16Pointer = rawBuffer.bindMemory(to: Int16.self)
+                int16ChannelData[0].update(from: int16Pointer.baseAddress!, count: frameCount)
+            }
+        }
+        
+        return buffer
+    }
+    
+    func stop() {
+        recognitionRequest?.endAudio()
+        recognitionTask?.cancel()
+    }
+}
+
 // Main execution
 @available(macOS 10.15, *)
 @MainActor
 func main() async {
-    fputs("Starting live microphone transcription... (Press Ctrl+C to stop)\n", stderr)
-    fputs("Speak into your microphone.\n", stderr)
+    let useStdin = CommandLine.arguments.contains("--stdin")
     
-    do {
-        if #available(macOS 26.0, *) {
-            // Use modern SpeechAnalyzer
-            let transcriber = StreamingTranscriber()
-            globalTranscriber = transcriber
-            try await transcriber.start()
-            
-            // Keep running until interrupted (sleep for ~1 year)
-            while true {
-                try await Task.sleep(nanoseconds: 86_400_000_000_000) // 1 day
+    if useStdin {
+        fputs("Starting stdin audio transcription... (Press Ctrl+C to stop)\n", stderr)
+        fputs("Expecting 16kHz, 16-bit, mono PCM audio on stdin.\n", stderr)
+        
+        do {
+            if #available(macOS 26.0, *) {
+                let transcriber = StdinStreamingTranscriber()
+                globalTranscriber = transcriber
+                try await transcriber.start()
+                
+                while true {
+                    try await Task.sleep(nanoseconds: 86_400_000_000_000)
+                }
+            } else {
+                let transcriber = LegacyStdinStreamingTranscriber()
+                globalTranscriber = transcriber
+                try transcriber.start()
+                
+                while true {
+                    try await Task.sleep(nanoseconds: 86_400_000_000_000)
+                }
             }
-        } else {
-            // Use legacy API
-            let transcriber = LegacyStreamingTranscriber()
-            globalTranscriber = transcriber
-            try transcriber.start()
-            
-            // Keep running until interrupted (sleep for ~1 year)
-            while true {
-                try await Task.sleep(nanoseconds: 86_400_000_000_000) // 1 day
-            }
+        } catch {
+            fputs("Error: \(error.localizedDescription)\n", stderr)
+            exit(1)
         }
-    } catch {
-        fputs("Error: \(error.localizedDescription)\n", stderr)
-        exit(1)
+    } else {
+        fputs("Starting live microphone transcription... (Press Ctrl+C to stop)\n", stderr)
+        fputs("Speak into your microphone.\n", stderr)
+        
+        do {
+            if #available(macOS 26.0, *) {
+                let transcriber = StreamingTranscriber()
+                globalTranscriber = transcriber
+                try await transcriber.start()
+                
+                while true {
+                    try await Task.sleep(nanoseconds: 86_400_000_000_000)
+                }
+            } else {
+                let transcriber = LegacyStreamingTranscriber()
+                globalTranscriber = transcriber
+                try transcriber.start()
+                
+                while true {
+                    try await Task.sleep(nanoseconds: 86_400_000_000_000)
+                }
+            }
+        } catch {
+            fputs("Error: \(error.localizedDescription)\n", stderr)
+            exit(1)
+        }
     }
 }
 

@@ -4,12 +4,14 @@ A Rust CLI tool and library for fast, on-device speech-to-text transcription usi
 
 ## Features
 
-- Neural Engine-accelerated transcription on macOS 26+ using SpeechAnalyzer
-- Completely on-device processing (no cloud or internet required)
-- Automatic API selection with fallback to SFSpeechRecognizer on older macOS versions
-- Clean Rust library API with Swift helper integration
-- Command-line interface and library support
-- Compatible with macOS 10.15 and later
+- **Fast Neural Engine transcription** on macOS 26+ using SpeechAnalyzer API
+- **Completely on-device** processing (no cloud or internet required)
+- **Live microphone transcription** with progressive real-time results  
+- **System audio tap support** via stdin for capturing system/application audio
+- **Automatic API selection** with fallback to SFSpeechRecognizer on older macOS versions
+- **Clean Rust library API** with Swift helper integration
+- **Command-line interface** and library support
+- Compatible with **macOS 10.15+** (Tahoe/macOS 26+ for latest features)
 
 ## Requirements
 
@@ -73,6 +75,8 @@ cargo install --path .
 
 ## Usage
 
+### File Transcription
+
 ```bash
 # Using cargo
 cargo run --release -- input.m4a
@@ -83,6 +87,43 @@ cargo run --release -- input.m4a
 # After installation
 swift-scribe input.m4a
 ```
+
+### Live Microphone Transcription
+
+```bash
+# Transcribe from microphone in real-time
+cargo run --release -- --mic
+
+# Or use the library API
+cargo run --example stream_mic
+```
+
+### System Audio Capture (stdin mode)
+
+The helper can accept audio from stdin for system audio tap integration:
+
+```bash
+# Using ffmpeg to capture and pipe audio
+ffmpeg -f avfoundation -i ":1" -ar 16000 -ac 1 -f s16le - | \
+  ./helpers/transcribe_stream --stdin
+
+# Or from an audio file
+ffmpeg -i audio.m4a -ar 16000 -ac 1 -f s16le - | \
+  ./helpers/transcribe_stream --stdin
+```
+
+**Audio Format:** 16kHz, 16-bit, mono PCM (s16le)
+
+For integration examples, see `examples/system_audio.rs` which demonstrates the pattern for:
+- Capturing system audio using ScreenCaptureKit or similar
+- Resampling to the required format
+- Piping to the transcription helper
+- Reading real-time transcription results
+
+**Recommended libraries for system audio:**
+- [ruhear](https://github.com/aizcutei/ruhear) - Simple cross-platform audio capture
+- [screencapturekit-rs](https://github.com/doom-fish/screencapturekit-rs) - macOS ScreenCaptureKit bindings
+- [cidre](https://github.com/yury/cidre) - Apple frameworks for Rust
 
 ## Architecture
 
