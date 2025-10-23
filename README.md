@@ -6,12 +6,14 @@ A Rust CLI tool and library for fast, on-device speech-to-text transcription usi
 
 - **Fast Neural Engine transcription** on macOS 26+ using SpeechAnalyzer API
 - **Completely on-device** processing (no cloud or internet required)
-- **Live microphone transcription** with progressive real-time results  
+- **Live microphone transcription** with progressive real-time results
+- **Programmatic audio input API** for system audio, streams, and custom sources
+- **Automatic format conversion** (f32/i16 PCM, resampling, stereo to mono)
 - **System audio tap support** via stdin for capturing system/application audio
 - **Automatic API selection** with fallback to SFSpeechRecognizer on older macOS versions
 - **Clean Rust library API** with Swift helper integration
 - **Command-line interface** and library support
-- Compatible with **macOS 10.15+** (Tahoe/macOS 26+ for latest features)
+- Compatible with **macOS 10.15+** (macOS 26 for latest features)
 
 ## Requirements
 
@@ -51,7 +53,7 @@ Install the Swift helper binary:
 ./install_helper.sh
 ```
 
-Example code:
+#### Basic File Transcription
 
 ```rust
 use swift_scribe::Transcriber;
@@ -62,7 +64,37 @@ let text = transcriber.transcribe_file(Path::new("audio.m4a"))?;
 println!("{}", text);
 ```
 
-See `LIBRARY_USAGE.md` for complete integration documentation.
+#### Programmatic Audio Input
+
+Transcribe audio from any source (system audio, network streams, etc.) without subprocess overhead:
+
+```rust
+use swift_scribe::StreamingTranscriber;
+
+let mut transcriber = StreamingTranscriber::builder()
+    .with_programmatic_input()
+    .build()?;
+
+transcriber.start()?;
+
+// Feed audio samples from your source
+loop {
+    let audio_samples: Vec<f32> = get_audio_from_source();  // Your audio
+    transcriber.feed_audio_f32(&audio_samples, 48000, 2)?;  // 48kHz stereo
+    
+    if let Some(result) = transcriber.poll_result()? {
+        if result.is_final {
+            println!("Transcription: {}", result.text);
+        }
+    }
+}
+
+transcriber.stop()?;
+```
+
+The API automatically handles format conversion (f32/i16), resampling to 16kHz, and stereo to mono conversion.
+
+See `docs/PROGRAMMATIC_AUDIO_API.md` for complete documentation and examples.
 
 ## Installation
 
@@ -97,6 +129,20 @@ cargo run --release -- --mic
 # Or use the library API
 cargo run --example stream_mic
 ```
+
+### System Audio Transcription Example
+
+Run the provided example that demonstrates programmatic audio input:
+
+```bash
+# Basic example with simulated audio
+cargo run --example programmatic_audio
+
+# System audio example with threading patterns
+cargo run --example system_audio_transcription
+```
+
+These examples show how to integrate with system audio capture libraries and manage real-time transcription streams.
 
 ### System Audio Capture (stdin mode)
 
@@ -181,8 +227,14 @@ swift-scribe-rs/
 ├── helpers/
 │   └── transcribe.swift     # Swift helper implementation
 ├── examples/
-│   ├── simple.rs            # Basic usage
-│   └── batch.rs             # Batch processing
+│   ├── programmatic_audio.rs           # Programmatic audio input demo
+│   └── system_audio_transcription.rs   # System audio integration example
+├── tests/
+│   └── api_tests.rs         # API and builder pattern tests
+├── docs/
+│   ├── PROGRAMMATIC_AUDIO_API.md      # Programmatic audio input guide
+│   ├── LIBRARY_USAGE.md               # Library integration guide
+│   └── BENCHMARKING.md                # Performance benchmarking
 ├── benchmark.sh             # Benchmarking script
 ├── install_helper.sh        # Helper installation
 ├── Makefile                 # Build configuration
@@ -314,18 +366,22 @@ ffprobe audio_file.ext
 
 ## Future Enhancements
 
-Potential features based on SpeechAnalyzer capabilities:
+Implemented features:
+- Programmatic audio input API for custom audio sources
+- Real-time transcription with streaming results
+- Live microphone transcription
+
+Potential future features based on SpeechAnalyzer capabilities:
 
 - Preset selection for different use cases
 - Multi-language support with locale selection
-- Real-time transcription mode
 - SRT subtitle export with timestamps
 - Alternative transcription suggestions
-- Microphone input streaming
 - Voice activity detection
 - DictationTranscriber fallback for older hardware
 - Confidence scores in output
 - JSON export with metadata
+- Context hints for improved accuracy
 
 See `SPEECHANALYZER_API_REFERENCE.md` for API capabilities.
 
