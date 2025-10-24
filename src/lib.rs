@@ -76,7 +76,7 @@
 //! See the [repository README](https://github.com/NimbleAINinja/swift-scribe-rs) for build instructions.
 
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
@@ -323,8 +323,9 @@ impl StreamingTranscriberBuilder {
             helper_path,
             input_mode: self.input_mode,
             process: None,
-            reader: None,
+            stdout: None,
             stdin: None,
+            line_buffer: String::new(),
         })
     }
 }
@@ -361,8 +362,9 @@ pub struct StreamingTranscriber {
     helper_path: PathBuf,
     input_mode: AudioInputMode,
     process: Option<Child>,
-    reader: Option<BufReader<std::process::ChildStdout>>,
+    stdout: Option<std::process::ChildStdout>,
     stdin: Option<std::process::ChildStdin>,
+    line_buffer: String,
 }
 
 impl StreamingTranscriber {
@@ -467,7 +469,19 @@ impl StreamingTranscriber {
             .take()
             .ok_or_else(|| "Failed to capture stdout".to_string())?;
 
-        self.reader = Some(BufReader::new(stdout));
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = stdout.as_raw_fd();
+            unsafe {
+                let flags = libc::fcntl(fd, libc::F_GETFL);
+                if flags != -1 {
+                    libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                }
+            }
+        }
+
+        self.stdout = Some(stdout);
 
         if matches!(self.input_mode, AudioInputMode::Programmatic) {
             let stdin = child
@@ -478,6 +492,7 @@ impl StreamingTranscriber {
         }
 
         self.process = Some(child);
+        self.line_buffer.clear();
 
         Ok(())
     }
@@ -522,27 +537,41 @@ impl StreamingTranscriber {
     /// }
     /// ```
     pub fn poll_result(&mut self) -> Result<Option<StreamingResult>, String> {
-        let reader = self
-            .reader
+        use std::io::Read;
+
+        let stdout = self
+            .stdout
             .as_mut()
             .ok_or_else(|| "Transcriber not started".to_string())?;
 
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => {
-                // EOF - process ended
-                return Err("Streaming process ended".to_string());
+        let mut byte = [0u8; 1];
+        loop {
+            match stdout.read(&mut byte) {
+                Ok(0) => {
+                    // EOF - process ended
+                    return Err("Streaming process ended".to_string());
+                }
+                Ok(_) => {
+                    let ch = byte[0] as char;
+                    if ch == '\n' {
+                        let line = self.line_buffer.trim();
+                        if !line.is_empty() {
+                            let result: StreamingResult = serde_json::from_str(line)
+                                .map_err(|e| format!("Failed to parse result: {}", e))?;
+                            self.line_buffer.clear();
+                            return Ok(Some(result));
+                        }
+                        self.line_buffer.clear();
+                    } else {
+                        self.line_buffer.push(ch);
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // No data available yet - return immediately (non-blocking)
+                    return Ok(None);
+                }
+                Err(e) => return Err(format!("Failed to read from helper: {}", e)),
             }
-            Ok(_) => {
-                let result: StreamingResult = serde_json::from_str(line.trim())
-                    .map_err(|e| format!("Failed to parse result: {}", e))?;
-                Ok(Some(result))
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // No data available yet
-                Ok(None)
-            }
-            Err(e) => Err(format!("Failed to read from helper: {}", e)),
         }
     }
 
@@ -728,7 +757,8 @@ impl StreamingTranscriber {
     /// ```
     pub fn stop(&mut self) -> Result<(), String> {
         self.stdin = None;
-        self.reader = None;
+        self.stdout = None;
+        self.line_buffer.clear();
 
         if let Some(mut process) = self.process.take() {
             let _ = process.kill();
